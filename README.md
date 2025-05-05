@@ -20,6 +20,10 @@ Each layer is formalized as a stochastic state-space model, enabling inference v
 - Support for dynamic environmental regime switching
 - Visualization: true vs estimated states, RMSE plots, contribution/consumption plots, and animated GIFs
 
+## Simulation Types
+- Exclude environment from x2 dynamics, comment out + x3_effect in f_x2
+- Exclude development from x3 dynamics, comment out 0.8 * combined_term in mu_t2 update 
+
 ## Dependencies
 
 - Python 3.8+
