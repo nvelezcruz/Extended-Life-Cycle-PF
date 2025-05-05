@@ -30,7 +30,7 @@ Each layer is formalized as a stochastic state-space model, enabling inference v
 - Python 3.8+
 - `numpy`
 - `matplotlib`
-- `os`, `json`, `pathlib`
+- `os`, `pathlib`
 - `matplotlib.animation` (Pillow backend required for saving GIFs)
 
 Install dependencies with:
