@@ -149,14 +149,28 @@ def compute_phi(
     Individuals close to the mean contribute more (Gaussian),
     with extra penalty if below the mean.
     Large individuals consume more (sigmoid).
+    Trait values are averaged from x1 and (optionally) x2 combined.
     """
-    D, T3, T2, T1, Nx1 = x1.shape
 
-    # Get all size values at t3
-    all_size_vals = [np.mean(x1[d_all, t3 - 1], axis=(0, 1))[0] for d_all in range(D)]
-    all_size_vals = np.array(all_size_vals)
-    pop_mean = np.mean(all_size_vals)
-    pop_std = np.std(all_size_vals)
+    D, T3, T2, T1, Nx1 = x1.shape
+    _, _, _, Nx2 = x2.shape
+
+    include_x2 = False  # Set to False to exclude x2 contribution
+
+    # Compute population-level combined values (x1 [+ x2]) at t3
+    all_combined_vals = []
+    for d_all in range(D):
+        x1_avg = np.mean(x1[d_all, t3 - 1], axis=(0, 1))  # shape (Nx1,)
+        if include_x2:
+            x2_avg = np.mean(x2[d_all, t3 - 1], axis=0)  # shape (Nx2,)
+            combined = x1_avg[0] + x2_avg[0]
+        else:
+            combined = x1_avg[0]
+        all_combined_vals.append(combined)
+
+    all_combined_vals = np.array(all_combined_vals)
+    pop_mean = np.mean(all_combined_vals)
+    pop_std = np.std(all_combined_vals)
     if pop_std == 0:
         pop_std = 1.0
 
@@ -167,12 +181,17 @@ def compute_phi(
 
     for d in assigned_d:
         x1_avg = np.mean(x1[d, t3 - 1], axis=(0, 1))
-        size_val = x1_avg[0]
-        deviation = size_val - pop_mean
+        if include_x2:
+            x2_avg = np.mean(x2[d, t3 - 1], axis=0)
+            combined_size = x1_avg[0] + x2_avg[0]
+        else:
+            combined_size = x1_avg[0]
+
+        deviation = combined_size - pop_mean
 
         # Asymmetric Gaussian contribution
         if deviation < 0:
-            contrib = np.exp(-0.5 * (deviation / (0.5 * pop_std)) ** 2)  # Penalize more
+            contrib = np.exp(-0.5 * (deviation / (0.5 * pop_std)) ** 2)
         else:
             contrib = np.exp(-0.5 * (deviation / (1.5 * pop_std)) ** 2)
 
@@ -183,7 +202,7 @@ def compute_phi(
         consumption_score += alpha_d[d] * consump
 
         print(f"[t3 = {t3-1} | comp = {component}] Individual {d}")
-        print(f"  Size trait        : {size_val:.4f}")
+        print(f"  Combined size val : {combined_size:.4f}")
         print(f"  Deviation from μ  : {deviation:.4f}")
         print(f"  Contribution (Asymmetric Gaussian) : {contrib:.4f}")
         print(f"  Consumption (Sigmoid)              : {consump:.4f}")
@@ -240,7 +259,7 @@ def f_x3(x3_prev, x1, x2, t3):
 
 
 def f_x2(x2_prev, mu_t2, x3_effect, A2_t2, alpha_x2=0.5, beta=0.8):
-    return x2_prev + alpha_x2 * (mu_t2 - A2_t2 @ x2_prev)  # + x3_effect
+    return x2_prev + alpha_x2 * (mu_t2 - A2_t2 @ x2_prev) + x3_effect
 
 
 def f_x1(
