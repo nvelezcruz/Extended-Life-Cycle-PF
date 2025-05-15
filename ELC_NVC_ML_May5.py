@@ -143,21 +143,20 @@ def plot_and_save_state_vs_estimate(
 
 
 def compute_phi(
-    x1, x2, weights_x1, weights_x2, alpha_d, Sigma, t3, assigned_d, component
+    x1, x2, x3, weights_x1, weights_x2, alpha_d, Sigma, t3, assigned_d, component
 ):
     """
-    Individuals close to the mean contribute more (Gaussian),
-    with extra penalty if below the mean.
-    Large individuals consume more (sigmoid).
-    Trait values are averaged from x1 and (optionally) x2 combined.
+    Computes contribution and consumption scores for a given component and set of individuals.
+    Contribution peaks near the population mean (asymmetric Gaussian), and
+    consumption increases with size (sigmoid). Both are scaled by environmental quality.
     """
 
     D, T3, T2, T1, Nx1 = x1.shape
     _, _, _, Nx2 = x2.shape
 
-    include_x2 = False  # Set to False to exclude x2 contribution
+    include_x2 = False  # Set to True if x2 should be included in size estimate
 
-    # Compute population-level combined values (x1 [+ x2]) at t3
+    # Step 1: Compute population-wide combined size values (x1 [+ x2]) at t3
     all_combined_vals = []
     for d_all in range(D):
         x1_avg = np.mean(x1[d_all, t3 - 1], axis=(0, 1))  # shape (Nx1,)
@@ -174,13 +173,14 @@ def compute_phi(
     if pop_std == 0:
         pop_std = 1.0
 
-    sharpness = 1.5 / pop_std  # for sigmoid
+    sharpness = 1.5 / pop_std  # for sigmoid scaling
 
     contribution_score = 0
     consumption_score = 0
 
+    # Step 3: Loop through assigned individuals
     for d in assigned_d:
-        x1_avg = np.mean(x1[d, t3 - 1], axis=(0, 1))
+        x1_avg = np.mean(x1[d, t3 - 1], axis=(0, 1))  # shape (Nx1,)
         if include_x2:
             x2_avg = np.mean(x2[d, t3 - 1], axis=0)
             combined_size = x1_avg[0] + x2_avg[0]
@@ -189,23 +189,24 @@ def compute_phi(
 
         deviation = combined_size - pop_mean
 
-        # Asymmetric Gaussian contribution
+        # Asymmetric Gaussian contribution (penalize large more harshly)
         if deviation < 0:
-            contrib = np.exp(-0.5 * (deviation / (0.5 * pop_std)) ** 2)
+            contrib = np.exp(-0.5 * (deviation / (0.50 * pop_std)) ** 2)
         else:
             contrib = np.exp(-0.5 * (deviation / (1.5 * pop_std)) ** 2)
 
-        # Sigmoid consumption: bigger individuals consume more
+        # Sigmoid consumption: larger individuals consume more, scaled by env
         consump = 1 / (1 + np.exp(-sharpness * deviation))
 
         contribution_score += alpha_d[d] * contrib
         consumption_score += alpha_d[d] * consump
 
         print(f"[t3 = {t3-1} | comp = {component}] Individual {d}")
+        print(f"[t3 = {t3-1} | comp = {component}] Population std σ: {pop_std:.4f}")
         print(f"  Combined size val : {combined_size:.4f}")
         print(f"  Deviation from μ  : {deviation:.4f}")
-        print(f"  Contribution (Asymmetric Gaussian) : {contrib:.4f}")
-        print(f"  Consumption (Sigmoid)              : {consump:.4f}")
+        print(f"  Contribution (env-scaled) : {contrib:.4f}")
+        print(f"  Consumption (env-scaled)  : {consump:.4f}")
         print("")
 
     return contribution_score, consumption_score
@@ -218,7 +219,7 @@ def compute_phi(
 
 
 # State transitions
-def f_x3(x3_prev, x1, x2, t3):
+def f_x3(x3_prev, x1, x2, x3, t3):
     if t3 >= T3 // 2:
         new_environment = np.array([12.0, 8.0, 30.0])
     else:
@@ -226,14 +227,33 @@ def f_x3(x3_prev, x1, x2, t3):
 
     # Compute phi values (now contribution and consumption)
     contrib_1, consump_1 = compute_phi(
-        x1, x2, weights_x1, weights_x2, alpha_d, Sigma, t3, assigned_d=[0], component=0
+        x1,
+        x2,
+        x3,
+        weights_x1,
+        weights_x2,
+        alpha_d,
+        Sigma,
+        t3,
+        assigned_d=[0],
+        component=0,
     )
     contrib_2, consump_2 = compute_phi(
-        x1, x2, weights_x1, weights_x2, alpha_d, Sigma, t3, assigned_d=[2], component=1
+        x1,
+        x2,
+        x3,
+        weights_x1,
+        weights_x2,
+        alpha_d,
+        Sigma,
+        t3,
+        assigned_d=[2],
+        component=1,
     )
     contrib_3, consump_3 = compute_phi(
         x1,
         x2,
+        x3,
         weights_x1,
         weights_x2,
         alpha_d,
@@ -461,8 +481,8 @@ def generate_true_data():
     # Initialize x3[0] (initial environmental conditions)
     x3[0, :] = np.array([27.0, 15.0, 10.0])
     x3_nonoise[0, :] = np.array([27.0, 15.0, 10.0])
-    contrib_scores = np.zeros((T3, 3))  # 3 components
-    consump_scores = np.zeros((T3, 3))
+    contrib_scores = np.zeros((T3, D))  # NEW — 1 column per individual
+    consump_scores = np.zeros((T3, D))
 
     # Loop through T3 and update dynamics, including environmental transition
     for t3 in range(1, T3):
@@ -473,9 +493,11 @@ def generate_true_data():
             new_environment = x3[0, :]
 
         # ---- Compute contribution & consumption ----
+        # ---- Compute phi values (contribution and consumption) ----
         contrib_1, consump_1 = compute_phi(
             x1,
             x2,
+            x3,
             weights_x1,
             weights_x2,
             alpha_d,
@@ -487,6 +509,7 @@ def generate_true_data():
         contrib_2, consump_2 = compute_phi(
             x1,
             x2,
+            x3,
             weights_x1,
             weights_x2,
             alpha_d,
@@ -498,6 +521,7 @@ def generate_true_data():
         contrib_3, consump_3 = compute_phi(
             x1,
             x2,
+            x3,
             weights_x1,
             weights_x2,
             alpha_d,
@@ -509,12 +533,14 @@ def generate_true_data():
 
         contribution = np.array([contrib_1, contrib_2, contrib_3])
         consumption = np.array([consump_1, consump_2, consump_3])
+
         regeneration_contribution = r_x3 * x3[t3 - 1, :] * (1 - x3[t3 - 1, :] / K_x3)
 
         # ---- Noiseless version for x3_nonoise ----
         contrib_1_nonoise, consump_1_nonoise = compute_phi(
             x1_nonoise,
             x2_nonoise,
+            x3_nonoise,
             weights_x1,
             weights_x2,
             alpha_d,
@@ -526,6 +552,7 @@ def generate_true_data():
         contrib_2_nonoise, consump_2_nonoise = compute_phi(
             x1_nonoise,
             x2_nonoise,
+            x3_nonoise,
             weights_x1,
             weights_x2,
             alpha_d,
@@ -537,6 +564,7 @@ def generate_true_data():
         contrib_3_nonoise, consump_3_nonoise = compute_phi(
             x1_nonoise,
             x2_nonoise,
+            x3_nonoise,
             weights_x1,
             weights_x2,
             alpha_d,
@@ -556,6 +584,7 @@ def generate_true_data():
         contrib_scores[t3, 0], consump_scores[t3, 0] = compute_phi(
             x1,
             x2,
+            x3,
             weights_x1,
             weights_x2,
             alpha_d,
@@ -567,6 +596,7 @@ def generate_true_data():
         contrib_scores[t3, 1], consump_scores[t3, 1] = compute_phi(
             x1,
             x2,
+            x3,
             weights_x1,
             weights_x2,
             alpha_d,
@@ -578,6 +608,7 @@ def generate_true_data():
         contrib_scores[t3, 2], consump_scores[t3, 2] = compute_phi(
             x1,
             x2,
+            x3,
             weights_x1,
             weights_x2,
             alpha_d,
@@ -586,6 +617,7 @@ def generate_true_data():
             assigned_d=[1, 3],
             component=2,
         )
+
         regeneration_contribution_nonoise = (
             r_x3 * x3_nonoise[t3 - 1, :] * (1 - x3_nonoise[t3 - 1, :] / K_x3)
         )
@@ -875,7 +907,7 @@ def multiscale_particle_filter(
         weights_x3_part = np.zeros(N_particles)
         for n in range(N_particles):
             x3_pred = f_x3(
-                x3_part[n, t3 - 1], x1_part[n], x2_part[n], t3
+                x3_part[n, t3 - 1], x1_part[n], x2_part[n], x3_part[n], t3
             ) + epsilon * np.random.normal(0, noise_std_x3, Nx3)
 
             x3_part[n, t3] = x3_pred
@@ -1260,56 +1292,55 @@ def create_rmse_x3_plot(rmse_x3, output_dir):
 
 def plot_contrib_consump_per_individual(contrib_scores, consump_scores, output_path):
     """
-    Plots contribution and consumption over t3 for each individual (d = 0 to 3),
-    with improved aesthetics.
+    Plots contribution and consumption over t3 for 3 logical groupings:
+    Individual 1 (Component 1), Individual 3 (Component 2), and Individuals 2 & 4 (Component 3).
+    If individuals share a component, only one line is plotted.
     """
     T3 = contrib_scores.shape[0]
-    d_to_component = {0: 0, 1: 2, 2: 1, 3: 2}
 
-    fig, axes = plt.subplots(4, 1, figsize=(10, 14), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(10, 11), sharex=True)
 
-    for d in range(4):
-        comp = d_to_component[d]
+    # Mapping: subplot index → (component index, individuals in label)
+    plot_info = {
+        0: (0, "Component 1 (Individual 1)"),
+        1: (1, "Component 2 (Individual 3)"),
+        2: (2, "Component 3 (Individuals 2 & 4)"),
+    }
 
+    for idx, (comp, title) in plot_info.items():
         scaled_contrib = 5.0 * contrib_scores[:, comp]
         scaled_consump = 5.0 * consump_scores[:, comp]
 
-        axes[d].plot(
+        axes[idx].plot(
             range(T3), scaled_contrib, label="Contribution", color="blue", linewidth=2
         )
-        axes[d].plot(
+        axes[idx].plot(
             range(T3), scaled_consump, label="Consumption", color="red", linewidth=2
         )
 
-        display_individual = d + 1
-        display_component = comp + 1
-
-        axes[d].set_title(
-            f"Individual {display_individual} (Component {display_component})",
-            fontsize=12,
-        )
-        axes[d].set_ylabel("Score", fontsize=10)
-        axes[d].grid(True, linestyle="--", alpha=0.5)
-
-        # Lighter, thinner switch line
-        axes[d].axvline(x=5, color="black", linestyle="--", linewidth=1)
+        axes[idx].set_title(title, fontsize=12)
+        axes[idx].set_ylabel("Score", fontsize=10)
+        axes[idx].grid(True, linestyle="--", alpha=0.5)
+        axes[idx].axvline(x=5, color="black", linestyle="--", linewidth=1)
 
     axes[-1].set_xlabel("Time $t_3$", fontsize=12)
-
-    # Shared legend outside
     lines, labels = axes[0].get_legend_handles_labels()
     fig.legend(lines, labels, loc="upper center", ncol=2, frameon=False, fontsize=11)
-
-    plt.tight_layout(rect=[0, 0, 1, 0.96])  # leave space at top for legend
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.savefig(output_path, dpi=300)
     plt.close()
-    print(f"Individual contribution/consumption plot saved to: {output_path}")
+    print(f"Grouped contribution/consumption plot saved to: {output_path}")
 
 
 def evaluate_and_plot_all(
     x1, x2, x3, x1_est, x2_est, x3_est, contrib_scores, consump_scores, output_folder
 ):
     # Create true vs estimated GIFs
+    plot_contrib_consump_per_individual(
+        contrib_scores,
+        consump_scores,
+        os.path.join(output_folder, "phi_per_individual.png"),
+    )
     create_x1_gifs(x1, x1_est, output_folder)
     create_x2_gifs(x2, x2_est, output_folder)
     create_x3_plots(x3, x3_est, output_folder)
@@ -1323,11 +1354,6 @@ def evaluate_and_plot_all(
     create_rmse_x1_gifs(rmse_x1, output_folder)
     create_rmse_x2_gifs(rmse_x2, output_folder)
     create_rmse_x3_plot(rmse_x3, output_folder)
-    plot_contrib_consump_per_individual(
-        contrib_scores,
-        consump_scores,
-        os.path.join(output_folder, "phi_per_individual.png"),
-    )
 
     print(f"All visualizations saved to {output_folder}")
 
